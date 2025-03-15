@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 )
 
 type Weather struct {
@@ -27,8 +29,18 @@ type WeatherDays struct {
 }
 
 var apiKey string
+var redisClient *redis.Client
+var ctx = context.Background()
 
 func main() {
+
+	client := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+	redisClient = client
+
 	e := echo.New()
 	err := godotenv.Load()
 	if err != nil {
@@ -43,6 +55,10 @@ func main() {
 
 func getWeatherInLocation(c echo.Context) error {
 	location := c.FormValue("location")
+	cachedWeather, err := redisClient.Get(ctx, location).Result()
+	if err == nil {
+		return c.String(http.StatusOK, cachedWeather)
+	}
 	resp, err := http.Get("https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" + location + "?unitGroup=us&include=days&key=" + apiKey + "&contentType=json")
 	if err != nil {
 		return c.String(http.StatusInternalServerError, "Failed to get weather data from api")
@@ -71,6 +87,11 @@ func getWeatherInLocation(c echo.Context) error {
 			FeelsLike:      dayMap["feelslike"].(float64),
 		})
 	}
+	jsonResponse, err := json.Marshal(varResponse)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, "Failed to MARSHALL weather data")
+	}
+	redisClient.Set(ctx, location, jsonResponse, 1*time.Hour)
 	return c.JSON(http.StatusOK, varResponse)
 }
 
